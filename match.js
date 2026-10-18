@@ -24,7 +24,7 @@
       const matchData = await api(`/match/${FIXTURE_ID}`);
       renderMatch(matchData);
     } catch (err) {
-      list.innerHTML = `<div class="state"><h3>Ошибка загрузки</h3><p>Попробуйте обновить.</p></div>`;
+      list.innerHTML = `<div class="state"><h3>Ошибка загрузки</h3><p>Проверьте интернет или обновите страницу.</p></div>`;
     }
   }
 
@@ -59,20 +59,20 @@
 
   async function runOracle() {
     const cta = document.querySelector('.oracle-cta');
-    cta.innerHTML = `<h3>Анализ...</h3><div class="progress-wrap"><div class="progress-bar" id="progress"></div></div><p id="think-status">Изучение истории H2H...</p>`;
-
-    const steps = ['Сбор xG и травм...', 'Запрос коэффициентов...', 'Моделирование Dixon-Coles...', 'Генерация ИИ-отчета...'];
-    for (let i = 0; i < steps.length; i++) {
-      await new Promise(r => setTimeout(r, 1500)); // Задержка для красоты, пока сервер думает
-      document.getElementById('think-status').textContent = steps[i];
-      document.getElementById('progress').style.width = `${((i+1)/steps.length)*100}%`;
-    }
+    cta.innerHTML = `<h3>Анализ...</h3><div class="progress-wrap"><div class="progress-bar" id="progress"></div></div><p id="think-status">Сбор данных и ИИ-анализ...</p>`;
+    
+    // Просто показываем анимацию загрузки, пока ждем сервер
+    let progress = 0;
+    const timer = setInterval(() => {
+      progress += 10;
+      if (progress > 90) progress = 90;
+      document.getElementById('progress').style.width = `${progress}%`;
+    }, 500);
 
     try {
-      // Стучимся к нашему новому люкс-эндпоинту
       const aiData = await api(`/oracle/${FIXTURE_ID}`, 'POST');
+      clearInterval(timer);
 
-      // Отрисовка карточек как в оригинале
       cta.innerHTML = `
         <div style="background: #f0f7ff; color: #1a1a1a; border-radius: 16px; padding: 20px; text-align: left; font-family: sans-serif; box-shadow: 0 4px 15px rgba(0,0,0,0.05);">
           <div style="display: flex; align-items: center; gap: 8px; font-weight: 600; color: #4a5568; margin-bottom: 12px;">
@@ -108,7 +108,8 @@
         </div>
       `;
     } catch (e) {
-      cta.innerHTML = `<h3>Ошибка</h3><p>Не удалось сгенерировать анализ. Сервер занят.</p>`;
+      clearInterval(timer);
+      cta.innerHTML = `<h3>Ошибка</h3><p>Не удалось получить анализ. Попробуйте позже.</p>`;
     }
   }
 
