@@ -9,7 +9,7 @@
   /* ───────── Config ───────── */
   const CONFIG = {
     api: 'https://v3.football.api-sports.io',
-    apiKey: 'ВАШ_API_КЛЮЧ_ЗДЕСЬ', // <--- ВСТАВЬТЕ СЮДА ВАШ КЛЮЧ
+    apiKey: '48a576d984d21c242b2dbea309b724e5', // <--- ВСТАВЬТЕ СЮДА ВАШ КЛЮЧ
     ttl: 45_000,
     liveRefresh: 60_000,
     timeout: 15_000,
