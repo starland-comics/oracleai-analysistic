@@ -78,7 +78,7 @@ body { min-height: 100dvh; background: var(--bg); color: var(--text); font-famil
 .state h3 { font-size: 15px; font-weight: 700; }
 .state p { font-size: 13px; color: var(--muted); }
 
-/* Match Page Styles */
+/* Match Page */
 .match-title { font-size: 16px; font-weight: 700; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; padding: 0 10px; }
 .score-card { text-align: center; padding: 20px 16px; margin-bottom: 12px; background: var(--glass); border: 1px solid var(--stroke); border-radius: var(--radius); }
 .score-main { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
@@ -89,8 +89,6 @@ body { min-height: 100dvh; background: var(--bg); color: var(--text); font-famil
 .stats-table { display: grid; gap: 8px; }
 .stat-row { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; font-size: 12px; align-items: center; border-bottom: 1px solid var(--stroke); padding-bottom: 6px; }
 .stat-row:last-child { border-bottom: none; }
-.odds-row { font-size: 13px; padding: 8px 0; border-bottom: 1px solid var(--stroke); display: flex; justify-content: space-between; }
-.odds-row b { color: var(--accent-2); }
 .btn { width: 100%; padding: 14px; border-radius: 12px; font-size: 14px; font-weight: 700; border: none; cursor: pointer; transition: transform .2s; }
 .btn:active { transform: scale(.97); }
 .btn.primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; box-shadow: 0 10px 20px -10px rgba(124,92,255,.8); }
