@@ -2,6 +2,7 @@
   'use strict';
   
   const API_URL = 'https://oracleai-scrapper.onrender.com/api';
+  const GROQ_API_KEY = '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'; // ВАШ КЛЮЧ
   const FIXTURE_ID = new URLSearchParams(location.search).get('id');
 
   const tg = window.Telegram?.WebApp;
@@ -19,20 +20,17 @@
   }
 
   async function loadMatch() {
-    if (!FIXTURE_ID) { list.innerHTML = '<p>ID матча не указан</p>'; return; }
+    if (!FIXTURE_ID) return;
     try {
-      // Запрашиваем детали матча (скрапер вернет статистику и xG)
       const matchData = await api(`/match/${FIXTURE_ID}`);
       renderMatch(matchData);
     } catch (err) {
-      list.innerHTML = `<div class="state"><h3>Ошибка</h3><p>${esc(err.message)}</p></div>`;
+      list.innerHTML = `<div class="state"><h3>Ошибка загрузки</h3><p>Попробуйте обновить страницу.</p></div>`;
     }
   }
 
   function renderMatch(data) {
     const fx = data.event;
-    if (!fx) { list.innerHTML = '<p>Данные не найдены</p>'; return; }
-
     titleEl.textContent = `${fx.home} — ${fx.away}`;
 
     let html = `
@@ -42,10 +40,9 @@
           <span class="score-big">${fx.homeScore ?? '-'} : ${fx.awayScore ?? '-'}</span>
           <img src="${fx.awayLogo || ''}" style="width:40px;height:40px;object-fit:contain;" onerror="this.style.display='none'">
         </div>
-        <div class="match-meta">${fx.minute || fx.status} · ${fx.league || 'Лига'}</div>
+        <div class="match-meta">${fx.minute || fx.status} · ${fx.league}</div>
       </div>`;
 
-    // Парсинг статистики FotMob
     let statsToRender = [];
     if (data.statistics && data.statistics.length > 0) {
       data.statistics.forEach(group => {
@@ -62,16 +59,14 @@
     }
 
     if (statsToRender.length > 0) {
-      const rows = statsToRender.map(s => `<div class="stat-row"><span>${esc(s.name)}</span><b>${esc(s.home)}</b><b>${esc(s.away)}</b></div>`).join('');
-      html += `<div class="match-section"><h3 class="section-title">Статистика матча</h3><div class="stats-table">${rows}</div></div>`;
-    } else {
-      html += `<div class="match-section"><p style="color:var(--muted);font-size:12px;">Статистика появится после начала матча.</p></div>`;
+      const rows = statsToRender.slice(0, 12).map(s => `<div class="stat-row"><span>${esc(s.name)}</span><b>${esc(s.home)}</b><b>${esc(s.away)}</b></div>`).join('');
+      html += `<div class="match-section"><h3 class="section-title">Статистика</h3><div class="stats-table">${rows}</div></div>`;
     }
 
     html += `
       <div class="oracle-cta">
         <h3>🧠 Oracle AI Deep Analysis</h3>
-        <p>Математический разбор на основе базы FotMob.</p>
+        <p>Анализ ИИ на основе xG, ударов и времени.</p>
         <button id="run-oracle" class="btn primary" style="margin-top:12px;">Разобрать матч</button>
       </div>`;
 
@@ -83,118 +78,154 @@
     });
   }
 
-  // --- Математика (Распределение Пуассона) ---
   function factorial(n) { if (n <= 1) return 1; let r = 1; for (let i = 2; i <= n; i++) r *= i; return r; }
   function poisson(k, lambda) { return (Math.exp(-lambda) * Math.pow(lambda, k)) / factorial(k); }
 
   async function runOracle(fx, stats) {
     const cta = document.querySelector('.oracle-cta');
-    cta.innerHTML = `<h3>Анализ...</h3><div class="progress-wrap"><div class="progress-bar" id="progress"></div></div><p id="think-status">Чтение базы FotMob...</p>`;
+    cta.innerHTML = `<h3>Анализ...</h3><div class="progress-wrap"><div class="progress-bar" id="progress"></div></div><p id="think-status">Чтение xG...</p>`;
 
-    const steps = ['Извлечение xG и ударов...', 'Оценка темпа игры...', 'Моделирование Пуассона...', 'Поиск оптимального исхода...'];
+    const steps = ['Анализ xG и ударов...', 'Моделирование счета...', 'Генерация ИИ-отчета...'];
     for (let i = 0; i < steps.length; i++) {
-      await new Promise(r => setTimeout(r, 600 + Math.random() * 400));
+      await new Promise(r => setTimeout(r, 800 + Math.random() * 400));
       document.getElementById('think-status').textContent = steps[i];
       document.getElementById('progress').style.width = `${((i+1)/steps.length)*100}%`;
     }
 
-    const isLive = fx.status === 'LIVE';
-    const isDone = fx.status === 'FT';
-    const gh = fx.homeScore ?? 0;
-    const ga = fx.awayScore ?? 0;
-    
-    // 1. Извлекаем РЕАЛЬНЫЕ данные из статистики FotMob
-    let xgHome = 1.35; // Средние по лиге, если нет xG
-    let xgAway = 1.15;
+    let xgHome = 1.35, xgAway = 1.15;
     let shotsHome = 0, shotsAway = 0;
-    let possessionHome = 50, possessionAway = 50;
-
+    
     stats.forEach(s => {
       if (s.name.includes('Expected goals') || s.name === 'xG') {
         xgHome = parseFloat(s.home) || xgHome;
         xgAway = parseFloat(s.away) || xgAway;
       }
-      if (s.name.includes('Shots on target') || s.name === 'Удары в створ') {
+      if (s.name.includes('Shots on target')) {
         shotsHome = parseInt(s.home) || 0;
         shotsAway = parseInt(s.away) || 0;
       }
-      if (s.name.includes('Ball possession') || s.name === 'Владение') {
-        possessionHome = parseInt(s.home) || 50;
-        possessionAway = parseInt(s.away) || 50;
-      }
     });
 
-    // 2. Корректируем ожидаемые голы (лямбды) для оставшегося времени
-    let lambdaHome = xgHome;
-    let lambdaAway = xgAway;
+    const gh = fx.homeScore ?? 0;
+    const ga = fx.awayScore ?? 0;
+    const isLive = fx.status === 'LIVE';
+    const isDone = fx.status === 'FT';
 
-    if (isLive) {
-      // В Live мы берем оставшееся время (грубо: 90 - текущая минута)
-      let minute = parseInt(fx.minute) || 45;
-      let timeLeftRatio = Math.max(0.1, (90 - minute) / 90);
+    // Исправление бага с 94-й минутой
+    let minute = parseInt(fx.minute) || 0;
+    let timeLeftRatio = 1.0; 
 
-      // Ожидаемые голы на остаток матча
-      lambdaHome = (xgHome * timeLeftRatio) + (shotsHome * 0.05 * timeLeftRatio);
-      lambdaAway = (xgAway * timeLeftRatio) + (shotsAway * 0.05 * timeLeftRatio);
-
-      // Команда, которая проигрывает, будет атаковать сильнее
-      if (gh > ga) lambdaAway *= 1.3;
-      if (ga > gh) lambdaHome *= 1.3;
-    } else if (isDone) {
-      lambdaHome = 0; lambdaAway = 0;
+    if (isDone) timeLeftRatio = 0;
+    else if (isLive) {
+      if (fx.minute.includes('HT')) timeLeftRatio = 0.5; 
+      else timeLeftRatio = Math.max(0, (90 - minute) / 90);
     }
+
+    let lambdaHome = xgHome * timeLeftRatio;
+    let lambdaAway = xgAway * timeLeftRatio;
+
+    if (gh > ga) lambdaAway *= 1.2;
+    if (ga > gh) lambdaHome *= 1.2;
 
     lambdaHome = Math.max(0.01, lambdaHome);
     lambdaAway = Math.max(0.01, lambdaAway);
 
-    // 3. Моделирование Пуассона (до 6 голов)
-    let pHomeWin = 0, pDraw = 0, pAwayWin = 0, pOver25 = 0, pUnder25 = 0;
-    for (let h = 0; h <= 6; h++) {
-      for (let a = 0; a <= 6; a++) {
+    // Расширенный расчет всех рынков
+    let markets = { p1: 0, px: 0, p2: 0, over05: 0, over15: 0, over25: 0, over35: 0, btts: 0, f1_m05: 0, f2_p05: 0 };
+
+    for (let h = 0; h <= 5; h++) {
+      for (let a = 0; a <= 5; a++) {
         const prob = poisson(h, lambdaHome) * poisson(a, lambdaAway);
         const finalH = gh + h;
         const finalA = ga + a;
         
-        if (finalH > finalA) pHomeWin += prob;
-        else if (finalH < finalA) pAwayWin += prob;
-        else pDraw += prob;
+        if (finalH > finalA) markets.p1 += prob;
+        else if (finalH < finalA) markets.p2 += prob;
+        else markets.px += prob;
+
+        if (finalH + finalA > 0.5) markets.over05 += prob;
+        if (finalH + finalA > 1.5) markets.over15 += prob;
+        if (finalH + finalA > 2.5) markets.over25 += prob;
+        if (finalH + finalA > 3.5) markets.over35 += prob;
+
+        if (finalH > 0 && finalA > 0) markets.btts += prob;
         
-        if (finalH + finalA > 2.5) pOver25 += prob;
-        else pUnder25 += prob;
+        if (finalH - finalA > 0.5) markets.f1_m05 += prob;
+        if (finalA - finalH > -0.5) markets.f2_p05 += prob;
       }
     }
 
-    // Нормализация
-    const sum = pHomeWin + pDraw + pAwayWin;
-    pHomeWin /= sum; pDraw /= sum; pAwayWin /= sum;
+    const sum = markets.p1 + markets.px + markets.p2;
+    for (let key in markets) markets[key] = markets[key] / sum;
 
-    // 4. Выбор лучшего исхода
     let bestPick = '';
-    let bestTotal = pOver25 > 0.55 ? 'ТБ 2.5' : (pUnder25 > 0.55 ? 'ТМ 2.5' : 'Тотал без перевеса');
+    let bestProb = 0;
+    
+    const outcomes = [
+      { name: `П1 (${fx.home})`, prob: markets.p1 },
+      { name: `П2 (${fx.away})`, prob: markets.p2 },
+      { name: `Ничья (X)`, prob: markets.px },
+      { name: `ТБ 2.5`, prob: markets.over25 },
+      { name: `ТМ 2.5`, prob: 1 - markets.over25 },
+      { name: `Обе забьют (Да)`, prob: markets.btts },
+      { name: `Обе забьют (Нет)`, prob: 1 - markets.btts },
+      { name: `Ф1 (-0.5)`, prob: markets.f1_m05 },
+      { name: `Ф2 (+0.5)`, prob: markets.f2_p05 }
+    ];
 
-    if (isDone) {
-      if (gh > ga) bestPick = `П1 (${fx.home})`;
-      else if (ga > gh) bestPick = `П2 (${fx.away})`;
-      else bestPick = `Ничья (X)`;
-    } else {
-      if (pHomeWin > pDraw && pHomeWin > pAwayWin) bestPick = `П1 (${fx.home})`;
-      else if (pAwayWin > pHomeWin && pAwayWin > pDraw) bestPick = `П2 (${fx.away})`;
-      else bestPick = `Ничья (X)`;
+    outcomes.forEach(o => {
+      if (o.prob > bestProb) { bestProb = o.prob; bestPick = o.name; }
+    });
+
+    let aiAnalysis = '';
+    const prompt = `Ты профессиональный футбольный аналитик-синдикатор. 
+Матч: ${fx.home} против ${fx.away}.
+Счет: ${gh}:${ga} (Статус: ${fx.status}, Время: ${fx.minute}).
+Статистика: xG хозяев - ${xgHome}, xG гостей - ${xgAway}. Удары в створ: ${shotsHome} vs ${shotsAway}.
+Математическая модель рассчитала вероятности: П1 - ${(markets.p1*100).toFixed(1)}%, X - ${(markets.px*100).toFixed(1)}%, П2 - ${(markets.p2*100).toFixed(1)}%. ТБ 2.5 - ${(markets.over25*100).toFixed(1)}%. ОЗ - ${(markets.btts*100).toFixed(1)}%.
+Самый вероятный исход по модели: ${bestPick} (${(bestProb*100).toFixed(1)}%). 
+
+Напиши подробный, страстный анализ на русском языке от лица ИИ. Объясни, почему выбран именно этот исход, опираясь на цифры, оставшееся время и контекст игры. Текст должен быть 3-4 абзаца.`;
+
+    try {
+      const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${GROQ_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: "llama3-8b-8192",
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.7
+        })
+      });
+      const aiJson = await aiRes.json();
+      aiAnalysis = aiJson.choices?.[0]?.message?.content || '';
+    } catch (e) {
+      console.warn('AI error:', e);
     }
 
-    // 5. Рендер результата
+    if (!aiAnalysis) {
+      aiAnalysis = `Математическая модель проанализировала статистику. Ожидаемые голы (xG): ${xgHome.toFixed(2)} у хозяев и ${xgAway.toFixed(2)} у гостей. На основе распределения Пуассона наиболее вероятным исходом видится <b>${bestPick}</b> с вероятностью ${(bestProb*100).toFixed(1)}%.`;
+    }
+
     cta.innerHTML = `
       <h3>✅ Вердикт Oracle</h3>
-      <div class="verdict-pick" style="font-size:22px; color:var(--accent-2); margin:16px 0;">${esc(bestPick)}</div>
-      <div style="font-size:12px; color:var(--muted); text-align:left; line-height:1.6; background:rgba(0,0,0,0.2); padding:12px; border-radius:10px;">
-        <b>Вероятности (1X2):</b><br>
-        П1: ${(pHomeWin*100).toFixed(1)}% | X: ${(pDraw*100).toFixed(1)}% | П2: ${(pAwayWin*100).toFixed(1)}%<br><br>
-        <b>Модель Тоталов:</b><br>
-        ТБ 2.5: ${(pOver25*100).toFixed(1)}% | ТМ 2.5: ${(pUnder25*100).toFixed(1)}%<br>
-        <i>Рекомендация: ${bestTotal}</i><br><br>
-        <b>Данные для расчета:</b><br>
-        xG: ${xgHome.toFixed(1)} - ${xgAway.toFixed(1)} | Владение: ${possessionHome}% - ${possessionAway}%
+      <div class="verdict-pick" style="font-size:22px; color:var(--accent-2); margin:16px 0;">${esc(bestPick)} <span style="font-size:14px;color:var(--text)">(${(bestProb*100).toFixed(1)}%)</span></div>
+      
+      <div style="font-size:13px; color:var(--text); text-align:left; line-height:1.6; background:rgba(0,0,0,0.2); padding:14px; border-radius:10px; border-left:3px solid var(--accent);">
+        ${aiAnalysis.replace(/\n/g, '<br>')}
       </div>
+      
+      <details style="margin-top:14px; font-size:12px; color:var(--muted); text-align:left;">
+        <summary style="cursor:pointer; font-weight:600;">Все вероятности</summary>
+        <div style="margin-top:8px; display:grid; gap:6px;">
+          <div>П1: ${(markets.p1*100).toFixed(1)}% | X: ${(markets.px*100).toFixed(1)}% | П2: ${(markets.p2*100).toFixed(1)}%</div>
+          <div>ТБ 2.5: ${(markets.over25*100).toFixed(1)}% | ТМ 2.5: ${((1-markets.over25)*100).toFixed(1)}%</div>
+          <div>ОЗ Да: ${(markets.btts*100).toFixed(1)}% | ОЗ Нет: ${((1-markets.btts)*100).toFixed(1)}%</div>
+        </div>
+      </details>
     `;
   }
 
