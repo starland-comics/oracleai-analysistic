@@ -3,7 +3,7 @@
 
   const CONFIG = {
     api: 'https://sports.bzzoiro.com/api/v2',
-    apiKey: 'c381d2ea1e1569e460c19f762aa5cd8438da4c86', // <--- ВАШ КЛЮЧ BSD
+    apiKey: 'c381d2ea1e1569e460c19f762aa5cd8438da4c86', // ВАШ КЛЮЧ
     liveRefresh: 60000,
   };
 
@@ -12,7 +12,7 @@
   
   const LEAGUE_PRIORITY = {
     'Premier League': 1, 'La Liga': 2, 'Serie A': 3, 'Bundesliga': 4, 'Ligue 1': 5,
-    'Russian Premier League': 6, 'Championship': 7, 'UEFA Champions League': 8, 'UEFA Europa League': 9,
+    'Russian Premier League': 6, 'Championship': 7, 'UEFA Champions League': 8,
   };
 
   const TRANSLATIONS = {
@@ -24,7 +24,6 @@
     'Real Madrid': 'Реал Мадрид', 'Barcelona': 'Барселона', 'Bayern München': 'Бавария',
     'Borussia Dortmund': 'Боруссия Дортмунд', 'PSG': 'ПСЖ', 'Juventus': 'Ювентус',
     'Inter': 'Интер', 'Milan': 'Милан', 'Spartak Moscow': 'Спартак', 'Zenit': 'Зенит',
-    'CSKA Moscow': 'ЦСКА', 'Dynamo Moscow': 'Динамо', 'Lokomotiv Moscow': 'Локомотив'
   };
 
   const tg = window.Telegram?.WebApp;
@@ -32,7 +31,16 @@
 
   const $ = (sel) => document.querySelector(sel);
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const pick = (obj, ...paths) => { for (const p of paths) { const val = p.split('.').reduce((a, k) => a?.[k], obj); if (val != null) return val; } return undefined; };
+  
+  // Универсальный парсер путей
+  const pick = (obj, ...paths) => { 
+    for (const p of paths) { 
+      const val = p.split('.').reduce((a, k) => a?.[k], obj); 
+      if (val != null && val !== '') return val; 
+    } 
+    return undefined; 
+  };
+  
   const dayStr = (offset = 0) => { const d = new Date(); d.setDate(d.getDate() + offset); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
 
   function translateName(name) {
@@ -54,19 +62,17 @@
       cache: 'no-store' 
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
+    const json = await res.json();
+    return json.results || json.data || json; // Достаем массив из ответа
   }
 
   function normalize(e) {
-    // Адаптация под структуру BSD
     const home = pick(e, 'home_team.name', 'home_team', 'homeTeam.name') || 'Дом';
     const away = pick(e, 'away_team.name', 'away_team', 'awayTeam.name') || 'Гости';
     
-    // Статус BSD может быть числом или строкой, приводим к стандарту
-    let status = pick(e, 'status', 'status.short', 'status_type') || 'NS';
-    status = String(status).toUpperCase();
-    if (status === 'NOT_STARTED') status = 'NS';
-    if (status === 'FINISHED') status = 'FT';
+    let status = String(pick(e, 'status', 'status.short', 'status_type') || 'NS').toUpperCase();
+    if (status === 'NOT_STARTED' || status === 'TIMED') status = 'NS';
+    if (status === 'FINISHED' || status === 'ENDED') status = 'FT';
 
     return {
       id: pick(e, 'id', 'event_id'),
@@ -77,11 +83,12 @@
       as: pick(e, 'score.away', 'away_score', 'scores.away'),
       status: status,
       minute: pick(e, 'minute', 'time_played', 'elapsed'),
-      league: translateName(pick(e, 'league.name', 'league_name', 'tournament.name') ?? ''),
-      leagueRaw: pick(e, 'league.name', 'league_name', 'tournament.name') ?? '',
+      league: translateName(pick(e, 'league.name', 'league_name', 'tournament.name') || ''),
+      leagueRaw: pick(e, 'league.name', 'league_name', 'tournament.name') || '',
       start: pick(e, 'start_time', 'start_at', 'event_date', 'scheduled_start_time'),
-      homeLogo: pick(e, 'home_team.logo', 'home_team_logo', 'homeTeam.logo'),
-      awayLogo: pick(e, 'away_team.logo', 'away_team_logo', 'awayTeam.logo'),
+      // Ищем логотипы во всех возможных полях BSD
+      homeLogo: pick(e, 'home_team.logo', 'home_team_logo', 'homeTeam.logo', 'home_team.image'),
+      awayLogo: pick(e, 'away_team.logo', 'away_team_logo', 'awayTeam.logo', 'away_team.image'),
     };
   }
 
@@ -117,6 +124,9 @@
 
   function render() {
     let filtered = allMatches.filter(m => {
+      // Фильтр Live (если выбрана вкладка Live, скрываем завершенные)
+      if (currentTab === 'live' && !LIVE.has(m.status)) return false;
+
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
         const qT = transliterate(q);
@@ -139,7 +149,7 @@
     });
 
     if (!filtered.length) {
-      list.innerHTML = `<div class="state"><h3>Ничего не найдено</h3><p>Попробуйте изменить запрос.</p></div>`;
+      list.innerHTML = `<div class="state"><h3>Ничего не найдено</h3><p>Матчей по этому фильтру нет.</p></div>`;
       return;
     }
 
@@ -156,13 +166,11 @@
   async function loadData(tab) {
     list.innerHTML = `<div class="state"><p>Загрузка...</p></div>`;
     try {
-      // Эндпоинты BSD
-      let path = tab === 'live' ? '/events/live/' : `/events/?date=${dayStr(tab === 'today' ? 0 : 1)}`;
-      const raw = await api(path);
+      // БЕРЕМ СЕГОДНЯШНИЕ МАТЧИ ДЛЯ ВСЕХ ВКЛАДОК (это надежнее)
+      let dateToFetch = tab === 'upcoming' ? dayStr(1) : dayStr(0);
+      const raw = await api(`/events/?date=${dateToFetch}`);
       
-      // BSD обычно возвращает данные в поле results или data
-      const items = raw.results || raw.data || raw || [];
-      allMatches = (Array.isArray(items) ? items : []).map(normalize);
+      allMatches = (Array.isArray(raw) ? raw : []).map(normalize);
       render();
     } catch (err) {
       list.innerHTML = `<div class="state"><h3>Ошибка API</h3><p>${esc(err.message)}</p></div>`;
