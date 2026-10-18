@@ -2,28 +2,26 @@
   'use strict';
 
   const CONFIG = {
-    api: 'https://sports.bzzoiro.com/api/v2',
-    apiKey: 'c381d2ea1e1569e460c19f762aa5cd8438da4c86', // ВАШ КЛЮЧ
-    liveRefresh: 60000,
+    api: 'https://api.5dollarfootballapi.com/v1',
+    apiKey: 'fb_live_Tpes2U4wXpp9ks62cJibhei2s0Yo5CAD', // ВАШ КЛЮЧ
+    cacheTime: 5 * 60 * 1000, // 5 минут кэша, чтобы не тратить лимиты
   };
 
-  const LIVE = new Set(['1H', '2H', 'HT', 'ET', 'BT', 'P', 'LIVE', 'IN_PLAY', 'PLAYING', '1ST_HALF', '2ND_HALF']);
+  const LIVE = new Set(['1H', '2H', 'HT', 'ET', 'BT', 'P', 'LIVE', 'IN_PLAY', 'PLAYING']);
   const DONE = new Set(['FT', 'AET', 'PEN', 'FINISHED', 'ENDED', 'AWD', 'WO']);
-  
+
   const LEAGUE_PRIORITY = {
     'Premier League': 1, 'La Liga': 2, 'Serie A': 3, 'Bundesliga': 4, 'Ligue 1': 5,
-    'Russian Premier League': 6, 'Championship': 7, 'UEFA Champions League': 8,
   };
 
   const TRANSLATIONS = {
     'Premier League': 'АПЛ', 'La Liga': 'Ла Лига', 'Serie A': 'Серия А',
-    'Bundesliga': 'Бундеслига', 'Ligue 1': 'Лига 1', 'Championship': 'Чемпионшип',
-    'Russian Premier League': 'РПЛ', 'UEFA Champions League': 'Лига Чемпионов',
+    'Bundesliga': 'Бундеслига', 'Ligue 1': 'Лига 1',
     'Manchester United': 'Манчестер Юнайтед', 'Manchester City': 'Манчестер Сити',
     'Arsenal': 'Арсенал', 'Chelsea': 'Челси', 'Liverpool': 'Ливерпуль',
     'Real Madrid': 'Реал Мадрид', 'Barcelona': 'Барселона', 'Bayern München': 'Бавария',
     'Borussia Dortmund': 'Боруссия Дортмунд', 'PSG': 'ПСЖ', 'Juventus': 'Ювентус',
-    'Inter': 'Интер', 'Milan': 'Милан', 'Spartak Moscow': 'Спартак', 'Zenit': 'Зенит',
+    'Inter': 'Интер', 'Milan': 'Милан',
   };
 
   const tg = window.Telegram?.WebApp;
@@ -31,16 +29,7 @@
 
   const $ = (sel) => document.querySelector(sel);
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  
-  // Универсальный парсер путей
-  const pick = (obj, ...paths) => { 
-    for (const p of paths) { 
-      const val = p.split('.').reduce((a, k) => a?.[k], obj); 
-      if (val != null && val !== '') return val; 
-    } 
-    return undefined; 
-  };
-  
+  const pick = (obj, ...paths) => { for (const p of paths) { const val = p.split('.').reduce((a, k) => a?.[k], obj); if (val != null) return val; } return undefined; };
   const dayStr = (offset = 0) => { const d = new Date(); d.setDate(d.getDate() + offset); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
 
   function translateName(name) {
@@ -56,39 +45,49 @@
     return str.toLowerCase().split('').map(c => ru[c] || c).join('');
   }
 
+  // Универсальный запрос с кэшированием
+  const cache = new Map();
   async function api(path) {
-    const res = await fetch(CONFIG.api + path, { 
-      headers: { 'Authorization': `Token ${CONFIG.apiKey}`, 'Accept': 'application/json' }, 
-      cache: 'no-store' 
+    const cacheKey = path;
+    const cached = cache.get(cacheKey);
+    if (cached && Date.now() - cached.time < CONFIG.cacheTime) {
+      return cached.data;
+    }
+
+    const res = await fetch(CONFIG.api + path, {
+      headers: { 'Authorization': `Bearer ${CONFIG.apiKey}` },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json();
-    return json.results || json.data || json; // Достаем массив из ответа
+    const data = await res.json();
+    
+    // 5DollarFootballAPI возвращает данные в поле 'data' или напрямую
+    const result = data.data || data;
+    cache.set(cacheKey, { data: result, time: Date.now() });
+    return result;
   }
 
   function normalize(e) {
-    const home = pick(e, 'home_team.name', 'home_team', 'homeTeam.name') || 'Дом';
-    const away = pick(e, 'away_team.name', 'away_team', 'awayTeam.name') || 'Гости';
+    const home = pick(e, 'teams.home.name', 'home_team.name') || 'Дом';
+    const away = pick(e, 'teams.away.name', 'away_team.name') || 'Гости';
     
-    let status = String(pick(e, 'status', 'status.short', 'status_type') || 'NS').toUpperCase();
+    let status = String(pick(e, 'status.short', 'status') || 'NS').toUpperCase();
     if (status === 'NOT_STARTED' || status === 'TIMED') status = 'NS';
     if (status === 'FINISHED' || status === 'ENDED') status = 'FT';
 
     return {
-      id: pick(e, 'id', 'event_id'),
+      id: pick(e, 'id', 'fixture.id'),
       home, away,
       homeTrans: transliterate(home), awayTrans: transliterate(away),
       homeRu: translateName(home), awayRu: translateName(away),
-      hs: pick(e, 'score.home', 'home_score', 'scores.home'),
-      as: pick(e, 'score.away', 'away_score', 'scores.away'),
+      hs: pick(e, 'goals.home', 'score.home', 'teams.home.score'),
+      as: pick(e, 'goals.away', 'score.away', 'teams.away.score'),
       status: status,
-      minute: pick(e, 'minute', 'time_played', 'elapsed'),
-      league: translateName(pick(e, 'league.name', 'league_name', 'tournament.name') || ''),
-      leagueRaw: pick(e, 'league.name', 'league_name', 'tournament.name') || '',
-      start: pick(e, 'start_time', 'start_at', 'event_date', 'scheduled_start_time'),
-      // Ищем логотипы во всех возможных полях BSD
-      homeLogo: pick(e, 'home_team.logo', 'home_team_logo', 'homeTeam.logo', 'home_team.image'),
-      awayLogo: pick(e, 'away_team.logo', 'away_team_logo', 'awayTeam.logo', 'away_team.image'),
+      minute: pick(e, 'status.elapsed', 'minute', 'time_played'),
+      league: translateName(pick(e, 'league.name', 'competition.name') || ''),
+      leagueRaw: pick(e, 'league.name', 'competition.name') || '',
+      start: pick(e, 'fixture.date', 'start_time', 'date'),
+      homeLogo: pick(e, 'teams.home.logo', 'teams.home.image', 'home_team.logo'),
+      awayLogo: pick(e, 'teams.away.logo', 'teams.away.image', 'away_team.logo'),
     };
   }
 
@@ -124,9 +123,9 @@
 
   function render() {
     let filtered = allMatches.filter(m => {
-      // Фильтр Live (если выбрана вкладка Live, скрываем завершенные)
       if (currentTab === 'live' && !LIVE.has(m.status)) return false;
-
+      if (currentTab === 'today' && m.status === 'FT') return false;
+      
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
         const qT = transliterate(q);
@@ -166,11 +165,14 @@
   async function loadData(tab) {
     list.innerHTML = `<div class="state"><p>Загрузка...</p></div>`;
     try {
-      // БЕРЕМ СЕГОДНЯШНИЕ МАТЧИ ДЛЯ ВСЕХ ВКЛАДОК (это надежнее)
-      let dateToFetch = tab === 'upcoming' ? dayStr(1) : dayStr(0);
-      const raw = await api(`/events/?date=${dateToFetch}`);
-      
-      allMatches = (Array.isArray(raw) ? raw : []).map(normalize);
+      let path = '/fixtures';
+      if (tab === 'live') path += '?status=live';
+      else if (tab === 'today') path += `?date=${dayStr(0)}`;
+      else if (tab === 'upcoming') path += `?date=${dayStr(1)}`;
+
+      const raw = await api(path);
+      const items = Array.isArray(raw) ? raw : (raw.fixtures || []);
+      allMatches = items.map(normalize);
       render();
     } catch (err) {
       list.innerHTML = `<div class="state"><h3>Ошибка API</h3><p>${esc(err.message)}</p></div>`;
@@ -197,6 +199,7 @@
   
   $('#refresh').addEventListener('click', () => {
     $('#refresh').classList.add('is-loading');
+    cache.clear(); // Сбрасываем кэш при обновлении
     loadData(currentTab).then(() => $('#refresh').classList.remove('is-loading'));
   });
 
