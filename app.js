@@ -1,29 +1,26 @@
 /* ═══════════════════════════════════════════════
-   ORACLE AI — Mini App
-   Vanilla JS · no deps · 0 build step
+   ORACLE AI — Main Mini App
+   Vanilla JS · API-Football Integration
    ═══════════════════════════════════════════════ */
 
 (() => {
   'use strict';
 
   /* ───────── Config ───────── */
-
   const CONFIG = {
-    api:         'https://sportscore.com/api/v1',
-    sport:       1,              // футбол
-    ttl:         45_000,         // кэш свежести данных
-    liveRefresh: 60_000,         // авто-обновление live
-    timeout:     10_000,
-    demo:        new URLSearchParams(location.search).has('demo'),
+    api: 'https://v3.football.api-sports.io',
+    apiKey: 'ВАШ_API_КЛЮЧ_ЗДЕСЬ', // <--- ВСТАВЬТЕ СЮДА ВАШ КЛЮЧ
+    ttl: 45_000,
+    liveRefresh: 60_000,
+    timeout: 15_000,
+    demo: new URLSearchParams(location.search).has('demo'),
   };
 
   const LIVE = new Set(['1H', '2H', 'HT', 'ET', 'BT', 'P', 'LIVE', 'IN_PLAY', 'PLAYING']);
   const DONE = new Set(['FT', 'AET', 'PEN', 'FINISHED', 'ENDED', 'AWD', 'WO']);
 
   /* ───────── Telegram ───────── */
-
   const tg = window.Telegram?.WebApp;
-
   if (tg) {
     tg.ready();
     tg.expand();
@@ -38,34 +35,24 @@
     document.documentElement.dataset.theme = 'light';
   }
 
-  const haptic    = (s = 'light') => { try { tg?.HapticFeedback?.impactOccurred(s); } catch {} };
-  const hapticSel = ()            => { try { tg?.HapticFeedback?.selectionChanged(); } catch {} };
+  const haptic = (s = 'light') => { try { tg?.HapticFeedback?.impactOccurred(s); } catch {} };
+  const hapticSel = () => { try { tg?.HapticFeedback?.selectionChanged(); } catch {} };
 
   /* ───────── Helpers ───────── */
-
-  const $  = (sel, root = document) => root.querySelector(sel);
+  const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
-
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
+  
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   }[c]));
 
-  /** безопасно достаёт значение по цепочке путей */
   const pick = (obj, ...paths) => {
     for (const path of paths) {
       const val = path.split('.').reduce((acc, key) => acc?.[key], obj);
       if (val !== undefined && val !== null && val !== '') return val;
     }
     return undefined;
-  };
-
-  const normStatus = (raw) => {
-    if (raw && typeof raw === 'object') {
-      raw = raw.type ?? raw.short ?? raw.name ?? raw.code ?? '';
-    }
-    return String(raw || 'NS').toUpperCase();
   };
 
   const hue = (str) => {
@@ -83,66 +70,39 @@
 
   const fmtTime = (val) => {
     if (!val) return '';
-    let d;
-    if (typeof val === 'number') {
-      d = new Date(val < 1e12 ? val * 1000 : val);
-    } else if (/^\d+$/.test(String(val))) {
-      d = new Date(Number(val) * 1000);
-    } else {
-      d = new Date(val);
-    }
+    const d = new Date(typeof val === 'number' && val < 1e12 ? val * 1000 : val);
     if (Number.isNaN(d.getTime())) return '';
     return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
   };
 
-  /* ───────── Normalization ───────── */
-
+  /* ───────── Normalization (API-Football specific) ───────── */
   function normalize(e) {
     return {
-      id:     pick(e, 'id', 'event_id', 'slug') ?? Math.random().toString(36).slice(2),
-      home:   pick(e, 'home_team.name', 'homeTeam.name', 'home.name', 'teams.home.name', 'home.title') ?? 'Дом',
-      away:   pick(e, 'away_team.name', 'awayTeam.name', 'away.name', 'teams.away.name', 'away.title') ?? 'Гости',
-      hs:     pick(e, 'score.current.home', 'score.home', 'scores.home', 'home_score', 'homeScore', 'score.home_score'),
-      as:     pick(e, 'score.current.away', 'score.away', 'scores.away', 'away_score', 'awayScore', 'score.away_score'),
-      status: normStatus(pick(e, 'status.type', 'status', 'state', 'match_status')),
-      minute: pick(e, 'status.minute', 'minute', 'time_played', 'elapsed', 'status.elapsed'),
-      league: pick(e, 'league.name', 'tournament.name', 'competition.name', 'league') ?? '',
-      start:  pick(e, 'start_time', 'startTime', 'start_at', 'date', 'utcDate', 'timestamp'),
+      id:     pick(e, 'fixture.id') ?? Math.random().toString(36).slice(2),
+      home:   pick(e, 'teams.home.name') ?? 'Дом',
+      away:   pick(e, 'teams.away.name') ?? 'Гости',
+      hs:     pick(e, 'goals.home'),
+      as:     pick(e, 'goals.away'),
+      status: pick(e, 'fixture.status.short') ?? 'NS',
+      minute: pick(e, 'fixture.status.elapsed'),
+      league: pick(e, 'league.name') ?? '',
+      start:  pick(e, 'fixture.date'),
     };
   }
 
-  function toArray(data) {
-    if (!data) return [];
-    if (Array.isArray(data)) return data;
-    for (const key of ['data', 'events', 'matches', 'results', 'response']) {
-      const v = data[key];
-      if (Array.isArray(v)) return v;
-      if (v && Array.isArray(v.data)) return v.data;
-      if (v && Array.isArray(v.events)) return v.events;
-    }
-    return [];
-  }
-
   /* ───────── Cache ───────── */
-
   const mem = new Map();
-
   function cacheGet(key) {
     const hit = mem.get(key);
     if (hit && Date.now() - hit.t < CONFIG.ttl) return hit.v;
-
     try {
       const raw = localStorage.getItem('oracle:' + key);
       if (!raw) return null;
       const obj = JSON.parse(raw);
-      if (obj && Date.now() - obj.t < CONFIG.ttl) {
-        mem.set(key, obj);
-        return obj.v;
-      }
+      if (obj && Date.now() - obj.t < CONFIG.ttl) { mem.set(key, obj); return obj.v; }
     } catch {}
     return null;
   }
-
   function cacheSet(key, value) {
     const obj = { t: Date.now(), v: value };
     mem.set(key, obj);
@@ -150,12 +110,10 @@
   }
 
   /* ───────── API ───────── */
-
   const endpoint = (tab) => {
-    const s = CONFIG.sport;
-    if (tab === 'live') return `/sports/${s}/events/live?page=1`;
-    if (tab === 'today') return `/sports/${s}/events?date=${dayStr(0)}&page=1`;
-    return `/sports/${s}/events?date=${dayStr(1)}&page=1`;
+    if (tab === 'live') return `/fixtures?live=all`;
+    if (tab === 'today') return `/fixtures?date=${dayStr(0)}`;
+    return `/fixtures?date=${dayStr(1)}`;
   };
 
   async function api(path) {
@@ -164,7 +122,10 @@
     try {
       const res = await fetch(CONFIG.api + path, {
         signal: ctrl.signal,
-        headers: { Accept: 'application/json' },
+        headers: { 
+          'x-apisports-key': CONFIG.apiKey,
+          'Accept': 'application/json' 
+        },
         cache: 'no-store',
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -175,18 +136,11 @@
   }
 
   /* ───────── Render ───────── */
-
   const list = $('#list');
 
   function badge(name) {
     const h = hue(name);
-    const initials = String(name)
-      .split(/\s+/)
-      .slice(0, 2)
-      .map(w => w[0] || '')
-      .join('')
-      .toUpperCase() || '?';
-
+    const initials = String(name).split(/\s+/).slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '?';
     return `<span class="badge" style="--c1:hsl(${h} 72% 60%);--c2:hsl(${(h + 38) % 360} 72% 46%)">${esc(initials)}</span>`;
   }
 
@@ -211,7 +165,7 @@
       : `<div class="vs">VS</div>`;
 
     return `
-      <article class="card" style="--i:${i}">
+      <article class="card" style="--i:${i}" onclick="location.href='match.html?id=${m.id}'" role="button" tabindex="0">
         <div class="card-top">
           <span class="league">${esc(m.league || 'Футбол')}</span>
           ${pill}
@@ -246,24 +200,18 @@
     list.innerHTML = `
       <div class="state card" style="--i:0">
         <div class="state-ic err"><svg class="ic"><use href="#i-alert"/></svg></div>
-        <h3>Не удалось загрузить</h3>
-        <p>${esc(err?.message || 'Ошибка сети')}. Проверьте соединение и попробуйте снова.</p>
+        <h3>Ошибка API</h3>
+        <p>${esc(err?.message || 'Проверьте ключ или соединение')}</p>
         <button class="btn" id="retry">Повторить</button>
       </div>`;
-    $('#retry')?.addEventListener('click', () => {
-      haptic('medium');
-      load(state.tab, { force: true });
-    });
+    $('#retry')?.addEventListener('click', () => { haptic('medium'); load(state.tab, { force: true }); });
   }
 
   function renderSkeleton() {
     list.setAttribute('aria-busy', 'true');
     list.innerHTML = Array.from({ length: 4 }, (_, i) => `
       <div class="card skel" style="--i:${i}" aria-hidden="true">
-        <div class="card-top">
-          <span class="sk" style="width:64px;height:9px"></span>
-          <span class="sk" style="width:46px;height:20px;border-radius:999px"></span>
-        </div>
+        <div class="card-top"><span class="sk" style="width:64px;height:9px"></span><span class="sk" style="width:46px;height:20px;border-radius:999px"></span></div>
         <div class="teams">
           <div class="team"><span class="sk circle"></span><span class="sk" style="height:12px"></span></div>
           <span class="sk" style="width:44px;height:24px"></span>
@@ -272,13 +220,13 @@
       </div>`).join('');
   }
 
-  /* ───────── State + loader ───────── */
-
+  /* ───────── State + Loader ───────── */
   const state = { tab: 'live', req: 0 };
   const inflight = new Set();
 
   function setLoading(on) {
     const btn = $('#refresh');
+    if (!btn) return;
     btn.classList.toggle('is-loading', on);
     btn.disabled = on;
   }
@@ -286,7 +234,6 @@
   async function load(tab, { force = false, silent = false } = {}) {
     if (inflight.has(tab)) return;
     inflight.add(tab);
-
     const req = ++state.req;
     setLoading(true);
 
@@ -295,17 +242,17 @@
     else if (!silent) renderSkeleton();
 
     try {
-      let items;
-
+      let items = [];
       if (CONFIG.demo) {
         await sleep(320);
         items = DEMO[tab] ?? [];
       } else {
         const raw = await api(endpoint(tab));
-        items = toArray(raw).map(normalize).filter(m => m.home && m.away);
+        items = (raw.response || []).map(normalize);
+        // Для сегодня/скоро оставляем только футбол (sport id)
+        if(tab !== 'live') items = items.filter(m => m.status !== 'CANC' && m.status !== 'PST');
         cacheSet(tab, items);
       }
-
       if (req === state.req) render(items);
     } catch (err) {
       if (req === state.req && !cached) renderError(err);
@@ -317,67 +264,45 @@
   }
 
   /* ───────── Tabs ───────── */
-
   const tabsEl = $('.tabs');
-
   $$('.tab').forEach((btn, index) => {
     btn.addEventListener('click', () => {
       if (btn.dataset.tab === state.tab) return;
-
       hapticSel();
       state.tab = btn.dataset.tab;
       tabsEl.style.setProperty('--i', index);
-
       $$('.tab').forEach(b => b.setAttribute('aria-selected', String(b === btn)));
-
       load(state.tab);
     });
   });
 
-  /* ───────── Refresh ───────── */
-
-  $('#refresh').addEventListener('click', () => {
-    haptic('medium');
-    load(state.tab, { force: true });
-  });
-
-  /* ───────── Auto refresh ───────── */
+  /* ───────── Refresh & Auto-refresh ───────── */
+  $('#refresh')?.addEventListener('click', () => { haptic('medium'); load(state.tab, { force: true }); });
 
   setInterval(() => {
-    if (document.visibilityState !== 'visible') return;
-    if (state.tab !== 'live') return;
-    load('live', { force: true, silent: true });
+    if (document.visibilityState === 'visible' && state.tab === 'live') load('live', { force: true, silent: true });
   }, CONFIG.liveRefresh);
 
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && state.tab === 'live') {
-      load('live', { silent: true });
-    }
+    if (document.visibilityState === 'visible' && state.tab === 'live') load('live', { silent: true });
   });
 
-  /* ───────── Demo data ───────── */
-
+  /* ───────── Demo Data ───────── */
   const DEMO = {
     live: [
-      { id: 'd1', home: 'Manchester City', away: 'Arsenal',        hs: 2, as: 1, status: '2H', minute: 67, league: 'Premier League' },
-      { id: 'd2', home: 'Real Madrid',     away: 'Barcelona',      hs: 1, as: 1, status: '2H', minute: 54, league: 'La Liga' },
-      { id: 'd3', home: 'Bayern München',  away: 'Borussia Dortmund', hs: 3, as: 2, status: 'HT', minute: 45, league: 'Bundesliga' },
-      { id: 'd4', home: 'PSG',             away: 'Marseille',      hs: 0, as: 0, status: '1H', minute: 21, league: 'Ligue 1' },
+      { id: '1035000', home: 'Manchester City', away: 'Arsenal', hs: 2, as: 1, status: '2H', minute: 67, league: 'Premier League' },
+      { id: '1035001', home: 'Real Madrid', away: 'Barcelona', hs: 1, as: 1, status: '2H', minute: 54, league: 'La Liga' }
     ],
     today: [
-      { id: 't1', home: 'Liverpool',   away: 'Chelsea',        hs: 2, as: 0, status: 'FT', league: 'Premier League' },
-      { id: 't2', home: 'Inter',       away: 'Juventus',       hs: null, as: null, status: 'NS', league: 'Serie A',     start: new Date(Date.now() + 3 * 3600e3) },
-      { id: 't3', home: 'Atlético',    away: 'Sevilla',        hs: null, as: null, status: 'NS', league: 'La Liga',     start: new Date(Date.now() + 5 * 3600e3) },
+      { id: '1035002', home: 'Liverpool', away: 'Chelsea', hs: 2, as: 0, status: 'FT', league: 'Premier League' },
+      { id: '1035003', home: 'Inter', away: 'Juventus', hs: null, as: null, status: 'NS', league: 'Serie A', start: new Date(Date.now() + 3 * 3600e3) }
     ],
     upcoming: [
-      { id: 'u1', home: 'Tottenham',   away: 'Newcastle',      hs: null, as: null, status: 'NS', league: 'Premier League', start: new Date(Date.now() + 26 * 3600e3) },
-      { id: 'u2', home: 'Napoli',      away: 'Milan',          hs: null, as: null, status: 'NS', league: 'Serie A',        start: new Date(Date.now() + 28 * 3600e3) },
-      { id: 'u3', home: 'Leverkusen',  away: 'RB Leipzig',     hs: null, as: null, status: 'NS', league: 'Bundesliga',     start: new Date(Date.now() + 30 * 3600e3) },
+      { id: '1035004', home: 'Tottenham', away: 'Newcastle', hs: null, as: null, status: 'NS', league: 'Premier League', start: new Date(Date.now() + 26 * 3600e3) }
     ],
   };
 
   /* ───────── Boot ───────── */
-
   tabsEl.style.setProperty('--i', 0);
   load('live');
 })();
