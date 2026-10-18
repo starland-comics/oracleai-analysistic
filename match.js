@@ -2,7 +2,7 @@
   'use strict';
   
   const API_URL = 'https://oracleai-scrapper.onrender.com/api';
-  const GROQ_API_KEY = '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'; // ВАШ КЛЮЧ
+  const GROQ_API_KEY = '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';
   const FIXTURE_ID = new URLSearchParams(location.search).get('id');
 
   const tg = window.Telegram?.WebApp;
@@ -85,9 +85,9 @@
     const cta = document.querySelector('.oracle-cta');
     cta.innerHTML = `<h3>Анализ...</h3><div class="progress-wrap"><div class="progress-bar" id="progress"></div></div><p id="think-status">Чтение xG...</p>`;
 
-    const steps = ['Анализ xG и ударов...', 'Моделирование счета...', 'Генерация ИИ-отчета...'];
+    const steps = ['Анализ xG и ударов...', 'Моделирование счета...', 'Фильтрация исходов...', 'Генерация ИИ-отчета...'];
     for (let i = 0; i < steps.length; i++) {
-      await new Promise(r => setTimeout(r, 800 + Math.random() * 400));
+      await new Promise(r => setTimeout(r, 700 + Math.random() * 400));
       document.getElementById('think-status').textContent = steps[i];
       document.getElementById('progress').style.width = `${((i+1)/steps.length)*100}%`;
     }
@@ -111,7 +111,6 @@
     const isLive = fx.status === 'LIVE';
     const isDone = fx.status === 'FT';
 
-    // Исправление бага с 94-й минутой
     let minute = parseInt(fx.minute) || 0;
     let timeLeftRatio = 1.0; 
 
@@ -130,8 +129,7 @@
     lambdaHome = Math.max(0.01, lambdaHome);
     lambdaAway = Math.max(0.01, lambdaAway);
 
-    // Расширенный расчет всех рынков
-    let markets = { p1: 0, px: 0, p2: 0, over05: 0, over15: 0, over25: 0, over35: 0, btts: 0, f1_m05: 0, f2_p05: 0 };
+    let markets = { p1: 0, px: 0, p2: 0, over05: 0, over15: 0, over25: 0, over35: 0, over45: 0, btts: 0 };
 
     for (let h = 0; h <= 5; h++) {
       for (let a = 0; a <= 5; a++) {
@@ -147,45 +145,77 @@
         if (finalH + finalA > 1.5) markets.over15 += prob;
         if (finalH + finalA > 2.5) markets.over25 += prob;
         if (finalH + finalA > 3.5) markets.over35 += prob;
+        if (finalH + finalA > 4.5) markets.over45 += prob;
 
         if (finalH > 0 && finalA > 0) markets.btts += prob;
-        
-        if (finalH - finalA > 0.5) markets.f1_m05 += prob;
-        if (finalA - finalH > -0.5) markets.f2_p05 += prob;
       }
     }
 
     const sum = markets.p1 + markets.px + markets.p2;
     for (let key in markets) markets[key] = markets[key] / sum;
 
+    // ФИЛЬТРАЦИЯ: Собираем только те исходы, которые еще не сыграли
+    const totalGoals = gh + ga;
+    let availableOutcomes = [];
+
+    if (!isDone) {
+      availableOutcomes.push({ name: `П1 (${fx.home})`, prob: markets.p1 });
+      availableOutcomes.push({ name: `Ничья (X)`, prob: markets.px });
+      availableOutcomes.push({ name: `П2 (${fx.away})`, prob: markets.p2 });
+    }
+
+    if (totalGoals < 1.5) {
+      availableOutcomes.push({ name: `ТБ 1.5`, prob: markets.over15 });
+      availableOutcomes.push({ name: `ТМ 1.5`, prob: 1 - markets.over15 });
+    }
+    if (totalGoals < 2.5) {
+      availableOutcomes.push({ name: `ТБ 2.5`, prob: markets.over25 });
+      availableOutcomes.push({ name: `ТМ 2.5`, prob: 1 - markets.over25 });
+    }
+    if (totalGoals < 3.5) {
+      availableOutcomes.push({ name: `ТБ 3.5`, prob: markets.over35 });
+      availableOutcomes.push({ name: `ТМ 3.5`, prob: 1 - markets.over35 });
+    }
+
+    // ОЗ имеет смысл только если хотя бы одна команда еще не забила
+    if (gh === 0 || ga === 0) {
+      availableOutcomes.push({ name: `Обе забьют (Да)`, prob: markets.btts });
+      availableOutcomes.push({ name: `Обе забьют (Нет)`, prob: 1 - markets.btts });
+    }
+
+    // Если матч завершен, выдаем результат
+    if (isDone) {
+       availableOutcomes = [{ name: gh > ga ? `П1 (${fx.home})` : ga > gh ? `П2 (${fx.away})` : `Ничья (X)`, prob: 1.0 }];
+    }
+
     let bestPick = '';
     let bestProb = 0;
-    
-    const outcomes = [
-      { name: `П1 (${fx.home})`, prob: markets.p1 },
-      { name: `П2 (${fx.away})`, prob: markets.p2 },
-      { name: `Ничья (X)`, prob: markets.px },
-      { name: `ТБ 2.5`, prob: markets.over25 },
-      { name: `ТМ 2.5`, prob: 1 - markets.over25 },
-      { name: `Обе забьют (Да)`, prob: markets.btts },
-      { name: `Обе забьют (Нет)`, prob: 1 - markets.btts },
-      { name: `Ф1 (-0.5)`, prob: markets.f1_m05 },
-      { name: `Ф2 (+0.5)`, prob: markets.f2_p05 }
-    ];
 
-    outcomes.forEach(o => {
-      if (o.prob > bestProb) { bestProb = o.prob; bestPick = o.name; }
-    });
+    if (availableOutcomes.length > 0) {
+      availableOutcomes.sort((a, b) => b.prob - a.prob);
+      bestPick = availableOutcomes[0].name;
+      bestProb = availableOutcomes[0].prob;
+    } else {
+      bestPick = 'Матч завершен';
+      bestProb = 0;
+    }
 
     let aiAnalysis = '';
-    const prompt = `Ты профессиональный футбольный аналитик-синдикатор. 
-Матч: ${fx.home} против ${fx.away}.
-Счет: ${gh}:${ga} (Статус: ${fx.status}, Время: ${fx.minute}).
-Статистика: xG хозяев - ${xgHome}, xG гостей - ${xgAway}. Удары в створ: ${shotsHome} vs ${shotsAway}.
-Математическая модель рассчитала вероятности: П1 - ${(markets.p1*100).toFixed(1)}%, X - ${(markets.px*100).toFixed(1)}%, П2 - ${(markets.p2*100).toFixed(1)}%. ТБ 2.5 - ${(markets.over25*100).toFixed(1)}%. ОЗ - ${(markets.btts*100).toFixed(1)}%.
-Самый вероятный исход по модели: ${bestPick} (${(bestProb*100).toFixed(1)}%). 
+    const topOutcomesStr = availableOutcomes.slice(0, 4).map(o => `${o.name} (${(o.prob*100).toFixed(1)}%)`).join(', ');
 
-Напиши подробный, страстный анализ на русском языке от лица ИИ. Объясни, почему выбран именно этот исход, опираясь на цифры, оставшееся время и контекст игры. Текст должен быть 3-4 абзаца.`;
+    const prompt = `Ты профессиональный футбольный аналитик-синдикатор с 20-летним опытом. 
+Матч: ${fx.home} против ${fx.away}.
+Текущий счет: ${gh}:${ga} (Статус: ${fx.status}, Время: ${fx.minute}).
+Статистика: xG хозяев - ${xgHome}, xG гостей - ${xgAway}. Удары в створ: ${shotsHome} vs ${shotsAway}.
+Математическая модель рассчитала вероятности. Доступные для ставки рынки (отсортированные по убыванию вероятности): ${topOutcomesStr}.
+Самый вероятный исход: ${bestPick} (${(bestProb*100).toFixed(1)}%). 
+
+Напиши развернутый, профессиональный анализ на русском языке (объемом 4-5 абзацев, около 250 слов). 
+В первом абзаце опиши текущую ситуацию на поле (счет, время, темп). 
+Во втором абзаце разбери статистику и xG (укажи, кто доминирует и почему). 
+В третьем абзаце объясни, почему математическая модель склоняется к ${bestPick}. 
+В четвертом абзаце сделай итоговый вывод и дай четкую рекомендацию. 
+Пиши уверенно, как эксперт, используй профессиональные термины (xG, валуй, прессинг, темп). Не используй списки, пиши сплошным текстом.`;
 
     try {
       const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -197,7 +227,8 @@
         body: JSON.stringify({
           model: "llama3-8b-8192",
           messages: [{ role: "user", content: prompt }],
-          temperature: 0.7
+          temperature: 0.6,
+          max_tokens: 1000
         })
       });
       const aiJson = await aiRes.json();
@@ -219,11 +250,11 @@
       </div>
       
       <details style="margin-top:14px; font-size:12px; color:var(--muted); text-align:left;">
-        <summary style="cursor:pointer; font-weight:600;">Все вероятности</summary>
-        <div style="margin-top:8px; display:grid; gap:6px;">
-          <div>П1: ${(markets.p1*100).toFixed(1)}% | X: ${(markets.px*100).toFixed(1)}% | П2: ${(markets.p2*100).toFixed(1)}%</div>
-          <div>ТБ 2.5: ${(markets.over25*100).toFixed(1)}% | ТМ 2.5: ${((1-markets.over25)*100).toFixed(1)}%</div>
-          <div>ОЗ Да: ${(markets.btts*100).toFixed(1)}% | ОЗ Нет: ${((1-markets.btts)*100).toFixed(1)}%</div>
+        <summary style="cursor:pointer; font-weight:600; margin-bottom:8px;">Полный расклад вероятностей</summary>
+        <div style="display:grid; gap:6px;">
+          <div><b>Исходы:</b> П1: ${(markets.p1*100).toFixed(1)}% | X: ${(markets.px*100).toFixed(1)}% | П2: ${(markets.p2*100).toFixed(1)}%</div>
+          <div><b>Тоталы (изначальные):</b> ТБ 1.5: ${(markets.over15*100).toFixed(1)}% | ТБ 2.5: ${(markets.over25*100).toFixed(1)}% | ТБ 3.5: ${(markets.over35*100).toFixed(1)}%</div>
+          <div><b>Обе забьют (изначальные):</b> Да: ${(markets.btts*100).toFixed(1)}% | Нет: ${((1-markets.btts)*100).toFixed(1)}%</div>
         </div>
       </details>
     `;
