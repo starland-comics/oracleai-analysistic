@@ -8,26 +8,18 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="aurora" aria-hidden="true">
-    <span class="blob b1"></span><span class="blob b2"></span>
-    <span class="blob b3"></span><span class="blob b4"></span>
-    <div class="grain"></div>
-  </div>
-
+  <div class="aurora" aria-hidden="true"><span class="blob b1"></span><span class="blob b2"></span></div>
   <div class="app">
     <header class="topbar">
-      <button id="back" class="icon-btn" aria-label="Назад" onclick="history.back()">
-        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
-      </button>
+      <button class="icon-btn" onclick="history.back()">←</button>
       <h1 id="match-title" class="match-title">Загрузка...</h1>
       <div style="width:44px"></div>
     </header>
 
-    <main id="match-content" class="list" aria-live="polite">
-      <div class="state"><p class="loading">Загрузка матча...</p></div>
+    <main id="match-content">
+      <div class="state"><p>Загрузка данных матча...</p></div>
     </main>
   </div>
-
   <script src="match.js"></script>
 </body>
 </html>
