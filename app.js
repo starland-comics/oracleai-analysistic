@@ -2,25 +2,17 @@
   'use strict';
 
   const CONFIG = {
-    api: 'https://v3.football.api-sports.io',
-    apiKey: '48a576d984d21c242b2dbea309b724e5', // <--- ВАШ КЛЮЧ
+    api: 'https://sports.bzzoiro.com/api/v2',
+    apiKey: 'c381d2ea1e1569e460c19f762aa5cd8438da4c86', // <--- ВАШ КЛЮЧ BSD
     liveRefresh: 60000,
   };
 
-  const LIVE = new Set(['1H', '2H', 'HT', 'ET', 'BT', 'P', 'LIVE', 'IN_PLAY', 'PLAYING']);
+  const LIVE = new Set(['1H', '2H', 'HT', 'ET', 'BT', 'P', 'LIVE', 'IN_PLAY', 'PLAYING', '1ST_HALF', '2ND_HALF']);
   const DONE = new Set(['FT', 'AET', 'PEN', 'FINISHED', 'ENDED', 'AWD', 'WO']);
   
-  // Приоритет лиг (чем меньше число, тем выше)
   const LEAGUE_PRIORITY = {
-    'Premier League': 1,
-    'La Liga': 2,
-    'Serie A': 3,
-    'Bundesliga': 4,
-    'Ligue 1': 5,
-    'Russian Premier League': 6,
-    'Championship': 7,
-    'UEFA Champions League': 8,
-    'UEFA Europa League': 9,
+    'Premier League': 1, 'La Liga': 2, 'Serie A': 3, 'Bundesliga': 4, 'Ligue 1': 5,
+    'Russian Premier League': 6, 'Championship': 7, 'UEFA Champions League': 8, 'UEFA Europa League': 9,
   };
 
   const TRANSLATIONS = {
@@ -57,26 +49,39 @@
   }
 
   async function api(path) {
-    const res = await fetch(CONFIG.api + path, { headers: { 'x-apisports-key': CONFIG.apiKey }, cache: 'no-store' });
+    const res = await fetch(CONFIG.api + path, { 
+      headers: { 'Authorization': `Token ${CONFIG.apiKey}`, 'Accept': 'application/json' }, 
+      cache: 'no-store' 
+    });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json();
   }
 
   function normalize(e) {
-    const home = pick(e, 'teams.home.name') ?? 'Дом';
-    const away = pick(e, 'teams.away.name') ?? 'Гости';
+    // Адаптация под структуру BSD
+    const home = pick(e, 'home_team.name', 'home_team', 'homeTeam.name') || 'Дом';
+    const away = pick(e, 'away_team.name', 'away_team', 'awayTeam.name') || 'Гости';
+    
+    // Статус BSD может быть числом или строкой, приводим к стандарту
+    let status = pick(e, 'status', 'status.short', 'status_type') || 'NS';
+    status = String(status).toUpperCase();
+    if (status === 'NOT_STARTED') status = 'NS';
+    if (status === 'FINISHED') status = 'FT';
+
     return {
-      id: pick(e, 'fixture.id'),
+      id: pick(e, 'id', 'event_id'),
       home, away,
       homeTrans: transliterate(home), awayTrans: transliterate(away),
       homeRu: translateName(home), awayRu: translateName(away),
-      hs: pick(e, 'goals.home'), as: pick(e, 'goals.away'),
-      status: pick(e, 'fixture.status.short') ?? 'NS',
-      minute: pick(e, 'fixture.status.elapsed'),
-      league: translateName(pick(e, 'league.name') ?? ''),
-      leagueRaw: pick(e, 'league.name') ?? '',
-      start: pick(e, 'fixture.date'),
-      homeLogo: pick(e, 'teams.home.logo'), awayLogo: pick(e, 'teams.away.logo'),
+      hs: pick(e, 'score.home', 'home_score', 'scores.home'),
+      as: pick(e, 'score.away', 'away_score', 'scores.away'),
+      status: status,
+      minute: pick(e, 'minute', 'time_played', 'elapsed'),
+      league: translateName(pick(e, 'league.name', 'league_name', 'tournament.name') ?? ''),
+      leagueRaw: pick(e, 'league.name', 'league_name', 'tournament.name') ?? '',
+      start: pick(e, 'start_time', 'start_at', 'event_date', 'scheduled_start_time'),
+      homeLogo: pick(e, 'home_team.logo', 'home_team_logo', 'homeTeam.logo'),
+      awayLogo: pick(e, 'away_team.logo', 'away_team_logo', 'awayTeam.logo'),
     };
   }
 
@@ -151,9 +156,13 @@
   async function loadData(tab) {
     list.innerHTML = `<div class="state"><p>Загрузка...</p></div>`;
     try {
-      let path = tab === 'live' ? '/fixtures?live=all' : `/fixtures?date=${dayStr(tab === 'today' ? 0 : 1)}`;
+      // Эндпоинты BSD
+      let path = tab === 'live' ? '/events/live/' : `/events/?date=${dayStr(tab === 'today' ? 0 : 1)}`;
       const raw = await api(path);
-      allMatches = (raw.response || []).map(normalize);
+      
+      // BSD обычно возвращает данные в поле results или data
+      const items = raw.results || raw.data || raw || [];
+      allMatches = (Array.isArray(items) ? items : []).map(normalize);
       render();
     } catch (err) {
       list.innerHTML = `<div class="state"><h3>Ошибка API</h3><p>${esc(err.message)}</p></div>`;
